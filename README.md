@@ -1,41 +1,41 @@
-# 🔒 SPPLoginMaster
+# SPPLoginMaster
 
-**Secure Privacy Protection Login Master**
+Fingerprint and password-based app protection for Linux.  
+Wraps any application with authentication and optional data encryption via gocryptfs + GPG.
 
-Protect any Linux app with fingerprint authentication and data encryption.  
-Works with Snap, Flatpak, and .deb applications on Ubuntu/Debian.
-
----
-
-## ✨ Features
-
-- 🖐 **Fingerprint authentication** via `fprintd`
-- 🔑 **Password authentication** via PAM
-- 🖐+🔑 **Both** (double factor)
-- 🔐 **Data encryption** with `gocryptfs` + GPG key
-- 📦 **Supports Snap, Flatpak, .deb** apps
-- 🖥 **GTK4/Libadwaita GUI** (native GNOME look)
-- 💻 **Full CLI** with interactive wizard
-- 🚨 **Panic mode**: unmount all vaults instantly
-- 🔄 **Per-app configuration**: different auth per app
+Supports snap, flatpak, and .deb applications on Ubuntu 22.04+.
 
 ---
 
-## 🔧 Requirements
+## Features
 
-| Dependency | Purpose |
-|------------|---------|
-| `fprintd` | Fingerprint authentication |
-| `gocryptfs` | Data encryption |
+- Fingerprint authentication via `fprintd`
+- Password authentication via PAM
+- Double factor (fingerprint + password)
+- Per-app data encryption with `gocryptfs` + GPG (RSA 4096)
+- App discovery across snap, flatpak, and .deb
+- GTK4/Libadwaita GUI
+- CLI with interactive wizard
+- Panic mode: unmount all vaults instantly
+- Per-app configuration with independent auth methods
+
+---
+
+## Requirements
+
+| Package | Purpose |
+|---------|---------|
+| `fprintd` | Fingerprint daemon |
+| `gocryptfs` | Filesystem encryption |
 | `gnupg2` | GPG key management |
-| `fuse` | Filesystem mounting |
-| `zenity` | GUI dialogs in wrappers |
-| `python3-gi` | GTK4 Python bindings |
-| `libadwaita` | GNOME UI library |
+| `fuse` | FUSE mounting |
+| `zenity` | Wrapper dialogs |
+| `python3-gi` | GTK4 bindings |
+| `libadwaita-1` | GNOME UI library |
 
 ---
 
-## 📥 Installation
+## Installation
 
 ```bash
 git clone https://github.com/sappafrancesco/SPPLoginMaster.git
@@ -46,7 +46,7 @@ chmod +x install.sh
 
 ---
 
-## 🚀 Usage
+## Usage
 
 ### GUI
 
@@ -57,28 +57,28 @@ spp-gui
 ### CLI
 
 ```bash
-# Initial setup (run once)
+# First-time setup
 spp-cli setup
 
-# Protect an app (interactive wizard)
+# Protect an app (interactive)
 spp-cli protect
 
-# Protect a specific app directly
+# Protect a specific app
 spp-cli protect --app-id snap:proton-mail --auth fingerprint
 
 # List protected apps
 spp-cli list
 
-# Mount a vault manually
+# Mount vault manually
 spp-cli mount snap:proton-mail
 
-# Unmount a vault
+# Unmount vault
 spp-cli unmount snap:proton-mail
 
 # Remove protection
 spp-cli unprotect snap:proton-mail
 
-# Emergency: unmount everything
+# Unmount all vaults immediately
 spp-cli panic
 
 # Status overview
@@ -87,57 +87,38 @@ spp-cli status
 
 ---
 
-## 🏗 Architecture
+## How it works
 
-```
-SPPLoginMaster/
-├── spp/
-│   ├── cli.py        # CLI (Click + Rich)
-│   ├── gui.py        # GTK4/Libadwaita GUI
-│   ├── protect.py    # Protect/unprotect workflow
-│   ├── security.py   # Fingerprint, GPG, gocryptfs
-│   ├── apps.py       # App discovery (snap/flatpak/deb)
-│   ├── launcher.py   # .desktop file management
-│   └── config.py     # JSON config manager
-├── install.sh
-├── setup.py
-└── README.md
-```
-
----
-
-## 🔐 How It Works
-
-1. **Setup**: generates a GPG key pair (RSA 4096) stored in `~/.gnupg`
-2. **Per-app keyfile**: generates a random 32-byte key, encrypts it with GPG → `~/.config/spploginmaster/<app>.key.gpg`
-3. **Vault init**: initializes a `gocryptfs` vault using the GPG keyfile as password
-4. **Data migration**: moves existing app data into the encrypted vault
-5. **Wrapper script**: creates a bash wrapper that:
-   - Verifies fingerprint/password
-   - Decrypts GPG keyfile in memory
+1. On setup, a GPG key pair (RSA 4096) is generated in `~/.gnupg`
+2. For each protected app, a random 32-byte key is generated and encrypted with GPG into `~/.config/spploginmaster/<app>.key.gpg`
+3. A `gocryptfs` vault is initialized using the GPG keyfile as passphrase
+4. Existing app data is migrated into the vault
+5. A bash wrapper is created that:
+   - Verifies the user (fingerprint / password / both)
+   - Decrypts the GPG keyfile in memory
    - Mounts the vault at the original data path
    - Launches the app
    - Unmounts on exit
-6. **Desktop integration**: patches the `.desktop` launcher to use the wrapper
+6. The app's `.desktop` launcher is patched to use the wrapper
 
 ---
 
-## 🛡 Security Model
+## Security model
 
-| Threat | Protection |
-|--------|-----------|
-| Someone opens the app without auth | Wrapper blocks launch |
-| Physical access to disk | gocryptfs encryption |
-| Bypass via `snap run` directly | Vault unmounted = app sees empty data |
-| Root access | Not protected (by design — root can do anything) |
+| Threat | Status |
+|--------|--------|
+| Unauthorized app launch | blocked by wrapper |
+| Physical disk access | encrypted by gocryptfs |
+| Direct `snap run` bypass | vault unmounted, app sees empty data |
+| Root access | not protected by design |
 
-> **Note**: Protection is user-level. Root access can always bypass it. For full disk encryption, use LUKS.
+Protection is user-level. It is not a substitute for full-disk encryption (LUKS) or TPM-based solutions.
 
 ---
 
-## ⚙ Configuration
+## Configuration
 
-Config is stored in `~/.config/spploginmaster/apps.json`:
+Stored in `~/.config/spploginmaster/apps.json`:
 
 ```json
 {
@@ -156,18 +137,29 @@ Config is stored in `~/.config/spploginmaster/apps.json`:
 
 ---
 
-## 🤝 Contributing
+## Project structure
 
-Pull requests welcome. Please open an issue first to discuss changes.
+```
+SPPLoginMaster/
+├── spp/
+│   ├── cli.py        # CLI (Click + Rich)
+│   ├── gui.py        # GTK4/Libadwaita GUI
+│   ├── protect.py    # protect/unprotect workflow
+│   ├── security.py   # fingerprint, GPG, gocryptfs
+│   ├── apps.py       # app discovery
+│   ├── launcher.py   # .desktop management
+│   └── config.py     # JSON config
+├── install.sh
+├── setup.py
+└── README.md
+```
 
 ---
 
-## 📄 License
+## Contributing
+
+Open an issue before submitting a pull request.
+
+## License
 
 GPL-3.0 — see [LICENSE](LICENSE)
-
----
-
-## ⚠️ Disclaimer
-
-This tool provides **user-level** security. It is not a substitute for full-disk encryption (LUKS) or hardware security modules (TPM). Use responsibly.
