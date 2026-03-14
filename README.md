@@ -169,9 +169,6 @@ The GPG-encrypted vault key lives at `~/.config/spploginmaster/<app-id>.key.gpg`
 | Direct `snap run` / `flatpak run` bypass | Vault is not mounted → app sees an empty data dir |
 | Session hijacking (fingerprint mode) | Requires both a valid fingerprint scan AND an unlocked GNOME keyring |
 | Root access | Not covered — root can read `/proc/mem` of a running process regardless |
-
-This is user-level protection. It is not a substitute for full-disk encryption (LUKS) or a TPM-backed solution. The threat model is unauthorized physical access and unauthorized local user access.
-
 ---
 
 ## Project structure
@@ -192,7 +189,7 @@ SPPLoginMaster/
 └── README.md
 ```
 
----
+Open an issue before submitting a pull request.
 
 ## License
 
