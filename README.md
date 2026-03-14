@@ -51,13 +51,10 @@ sudo apt install fprintd gocryptfs fuse gnupg2 zenity libsecret-tools pamtester 
 ## Installation
 
 ```bash
-git clone https://github.com/sappafrancesco/SPPLoginMaster.git
-cd SPPLoginMaster
-chmod +x install.sh
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/sappafrancesco/SPPLoginMaster/main/install.sh | bash
 ```
 
-This installs the `spp-gui` and `spp-cli` commands system-wide.
+This installs the `spp-gui` and `spp-cli` commands system-wide, using just one command.
 
 ---
 
