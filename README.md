@@ -1,104 +1,192 @@
-# 🔒 SPPLoginMaster
+# SPPLoginMaster
 
-**Secure Privacy Protection Login Master**
+Wrap any Linux app with fingerprint or password authentication. App data is encrypted at rest with gocryptfs; the encryption key is protected by GPG symmetric AES-256. Supports snap, flatpak, and .deb apps on Ubuntu 22.04+.
 
-Protect any Linux app with fingerprint authentication and data encryption.  
-Works with Snap, Flatpak, and .deb applications on Ubuntu/Debian.
-
----
-
-## ✨ Features
-
-- 🖐 **Fingerprint authentication** via `fprintd`
-- 🔑 **Password authentication** via PAM
-- 🖐+🔑 **Both** (double factor)
-- 🔐 **Data encryption** with `gocryptfs` + GPG key
-- 📦 **Supports Snap, Flatpak, .deb** apps
-- 🖥 **GTK4/Libadwaita GUI** (native GNOME look)
-- 💻 **Full CLI** with interactive wizard
-- 🚨 **Panic mode**: unmount all vaults instantly
-- 🔄 **Per-app configuration**: different auth per app
+![Main window](screenshots/01-main-window.png)
 
 ---
 
-## 🔧 Requirements
+## How it works
 
-| Dependency | Purpose |
-|------------|---------|
-| `fprintd` | Fingerprint authentication |
-| `gocryptfs` | Data encryption |
-| `gnupg2` | GPG key management |
-| `fuse` | Filesystem mounting |
-| `zenity` | GUI dialogs in wrappers |
-| `python3-gi` | GTK4 Python bindings |
-| `libadwaita` | GNOME UI library |
+When you protect an app, SPPLoginMaster:
+
+1. Generates a random 256-bit vault key and encrypts it with GPG (AES-256, SHA-512 S2K, 65M iterations) into `~/.config/spploginmaster/<app>.key.gpg`
+2. Initialises a `gocryptfs` vault and migrates the app's existing data into it
+3. Replaces the app's `.desktop` launcher with a wrapper script that:
+   - Authenticates the user (fingerprint / password / both)
+   - Decrypts the GPG keyfile in memory
+   - Mounts the vault at the original data path
+   - Launches the app, then unmounts when it exits
+
+The app's original data directory becomes a gocryptfs mount point. If the vault is not unlocked, the app starts with an empty data directory — it cannot read any user data.
+
+### Key derivation
+
+| Auth method | How the GPG passphrase is derived |
+|---|---|
+| **Password** | `PBKDF2-HMAC-SHA256(password, per-app salt, 600 000 iters)` — never stored |
+| **Fingerprint** | 32-byte random secret stored in the GNOME keyring (libsecret); released only after a successful fprintd scan |
+| **Both** | PBKDF2 passphrase AND fprintd scan both required |
 
 ---
 
-## 📥 Installation
+## Requirements
+
+```
+sudo apt install fprintd gocryptfs fuse gnupg2 zenity libsecret-tools pamtester python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+```
+
+| Package | Purpose |
+|---|---|
+| `fprintd` | Fingerprint daemon |
+| `gocryptfs` | Filesystem encryption (FUSE) |
+| `gnupg2` | GPG symmetric encryption of the vault key |
+| `libsecret-tools` | GNOME keyring access for fingerprint mode |
+| `pamtester` | PAM password verification |
+| `zenity` | Dialogs for the wrapper script |
+| `python3-gi`, `gir1.2-adw-1` | GTK4/Libadwaita Python bindings |
+
+---
+
+## Installation
 
 ```bash
-git clone https://github.com/youruser/SPPLoginMaster.git
+git clone https://github.com/sappafrancesco/SPPLoginMaster.git
 cd SPPLoginMaster
 chmod +x install.sh
 ./install.sh
 ```
 
+This installs the `spp-gui` and `spp-cli` commands system-wide.
+
 ---
 
-## 🚀 Usage
-
-### GUI
+## GUI
 
 ```bash
 spp-gui
 ```
 
-### CLI
+### Protecting an app
+
+Click **+** (or `Ctrl+N`) to open the wizard.
+
+**Step 1 — Choose app.** All installed snap, flatpak, and .deb applications are listed. Already-protected apps are excluded.
+
+![Wizard step 1: choose app](screenshots/02-wizard-choose-app.png)
+
+**Step 2 — Configure.** Pick the authentication method and whether to encrypt data. If fingerprint is not enrolled, only password is available.
+
+![Wizard step 2: configure auth and encryption](screenshots/03-wizard-configure.png)
+
+**Step 3 — Confirm.** Review and click *Protect App*. The vault is initialised and the launcher is patched in the background.
+
+### Managing protected apps
+
+Expanding a row shows the data path, vault location, identifier, and action buttons.
+
+![App row expanded, locked](screenshots/04-app-expanded-locked.png)
+
+Clicking **Unlock** triggers authentication. For fingerprint mode the dialog starts the scan immediately.
+
+![Fingerprint auth dialog](screenshots/05-fingerprint-auth.png)
+
+After a successful scan the badge switches to **Unlocked** and the vault is mounted.
+
+![App row expanded, unlocked](screenshots/06-app-expanded-unlocked.png)
+
+### Panic button
+
+The red lock icon in the header bar (`Ctrl+Shift+L`) immediately unmounts all vaults. Use this if you need to lock everything at once.
+
+---
+
+## CLI
 
 ```bash
-# Initial setup (run once)
+# Check dependencies and fingerprint status
 spp-cli setup
 
-# Protect an app (interactive wizard)
+# Interactive wizard (lists apps, asks auth method)
 spp-cli protect
 
-# Protect a specific app directly
-spp-cli protect --app-id snap:proton-mail --auth fingerprint
+# Non-interactive
+spp-cli protect --app-id snap:spotify --auth fingerprint
 
-# List protected apps
+# Protect without data encryption (not recommended)
+spp-cli protect --app-id snap:spotify --auth password --no-encrypt
+
+# List protected apps with mount status
 spp-cli list
 
-# Mount a vault manually
-spp-cli mount snap:proton-mail
-
-# Unmount a vault
-spp-cli unmount snap:proton-mail
-
-# Remove protection
-spp-cli unprotect snap:proton-mail
-
-# Emergency: unmount everything
-spp-cli panic
-
-# Status overview
+# Show lock/unlock status
 spp-cli status
+
+# Mount vault (prompts for auth)
+spp-cli mount snap:spotify
+
+# Unmount vault
+spp-cli unmount snap:spotify
+
+# Remove protection (decrypts and restores original data)
+spp-cli unprotect snap:spotify
+
+# Lock all vaults immediately
+spp-cli panic
 ```
 
 ---
 
-## 🏗 Architecture
+## Configuration
+
+Stored in `~/.config/spploginmaster/apps.json`:
+
+```json
+{
+  "snap:spotify": {
+    "id": "snap:spotify",
+    "name": "spotify",
+    "type": "snap",
+    "auth_method": "fingerprint",
+    "encrypt_data": true,
+    "vault_path": "~/.local/share/spploginmaster/vaults/snap_spotify",
+    "mount_path": "~/snap/spotify/common",
+    "launch_cmd": "snap run spotify"
+  }
+}
+```
+
+The GPG-encrypted vault key lives at `~/.config/spploginmaster/<app-id>.key.gpg`.
+
+---
+
+## Security model
+
+| Threat | Coverage |
+|---|---|
+| Unauthorized app launch | Wrapper requires auth before mounting |
+| Physical disk access (stolen drive) | gocryptfs encrypts all app data |
+| Direct `snap run` / `flatpak run` bypass | Vault is not mounted → app sees an empty data dir |
+| Session hijacking (fingerprint mode) | Requires both a valid fingerprint scan AND an unlocked GNOME keyring |
+| Root access | Not covered — root can read `/proc/mem` of a running process regardless |
+
+This is user-level protection. It is not a substitute for full-disk encryption (LUKS) or a TPM-backed solution. The threat model is unauthorized physical access and unauthorized local user access.
+
+---
+
+## Project structure
 
 ```
 SPPLoginMaster/
 ├── spp/
 │   ├── cli.py        # CLI (Click + Rich)
 │   ├── gui.py        # GTK4/Libadwaita GUI
-│   ├── protect.py    # Protect/unprotect workflow
-│   ├── security.py   # Fingerprint, GPG, gocryptfs
-│   ├── apps.py       # App discovery (snap/flatpak/deb)
-│   ├── launcher.py   # .desktop file management
-│   └── config.py     # JSON config manager
+│   ├── protect.py    # protect/unprotect orchestration
+│   ├── security.py   # fingerprint, GPG, gocryptfs, PBKDF2
+│   ├── auth.py       # passphrase retrieval (keyring + PAM)
+│   ├── apps.py       # snap/flatpak/.deb discovery
+│   ├── launcher.py   # .desktop patching
+│   └── config.py     # JSON config
 ├── install.sh
 ├── setup.py
 └── README.md
@@ -106,68 +194,6 @@ SPPLoginMaster/
 
 ---
 
-## 🔐 How It Works
-
-1. **Setup**: generates a GPG key pair (RSA 4096) stored in `~/.gnupg`
-2. **Per-app keyfile**: generates a random 32-byte key, encrypts it with GPG → `~/.config/spploginmaster/<app>.key.gpg`
-3. **Vault init**: initializes a `gocryptfs` vault using the GPG keyfile as password
-4. **Data migration**: moves existing app data into the encrypted vault
-5. **Wrapper script**: creates a bash wrapper that:
-   - Verifies fingerprint/password
-   - Decrypts GPG keyfile in memory
-   - Mounts the vault at the original data path
-   - Launches the app
-   - Unmounts on exit
-6. **Desktop integration**: patches the `.desktop` launcher to use the wrapper
-
----
-
-## 🛡 Security Model
-
-| Threat | Protection |
-|--------|-----------|
-| Someone opens the app without auth | Wrapper blocks launch |
-| Physical access to disk | gocryptfs encryption |
-| Bypass via `snap run` directly | Vault unmounted = app sees empty data |
-| Root access | Not protected (by design — root can do anything) |
-
-> **Note**: Protection is user-level. Root access can always bypass it. For full disk encryption, use LUKS.
-
----
-
-## ⚙ Configuration
-
-Config is stored in `~/.config/spploginmaster/apps.json`:
-
-```json
-{
-  "snap:proton-mail": {
-    "id": "snap:proton-mail",
-    "name": "proton-mail",
-    "type": "snap",
-    "auth_method": "fingerprint",
-    "encrypt_data": true,
-    "vault_path": "~/.local/share/spploginmaster/vaults/snap_proton-mail",
-    "mount_path": "~/snap/proton-mail",
-    "launch_cmd": "snap run proton-mail"
-  }
-}
-```
-
----
-
-## 🤝 Contributing
-
-Pull requests welcome. Please open an issue first to discuss changes.
-
----
-
-## 📄 License
+## License
 
 GPL-3.0 — see [LICENSE](LICENSE)
-
----
-
-## ⚠️ Disclaimer
-
-This tool provides **user-level** security. It is not a substitute for full-disk encryption (LUKS) or hardware security modules (TPM). Use responsibly.
