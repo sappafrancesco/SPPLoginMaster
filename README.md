@@ -38,7 +38,7 @@ Works with Snap, Flatpak, and .deb applications on Ubuntu/Debian.
 ## 📥 Installation
 
 ```bash
-git clone https://github.com/youruser/SPPLoginMaster.git
+git clone https://github.com/sappafrancesco/SPPLoginMaster.git
 cd SPPLoginMaster
 chmod +x install.sh
 ./install.sh
