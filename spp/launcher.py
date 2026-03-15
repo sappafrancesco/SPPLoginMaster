@@ -3,12 +3,55 @@ SPPLoginMaster - Desktop Launcher Manager
 Creates and manages .desktop wrapper files for protected apps
 """
 
+import hashlib
+import hmac as _hmac
+import secrets as _secrets
 import shutil
 import subprocess
 from pathlib import Path
 
 DESKTOP_DIR = Path.home() / ".local" / "share" / "applications"
 SPP_WRAPPER_DIR = Path.home() / ".local" / "bin" / "spp-wrappers"
+
+_WRAPPER_KEY_PATH = Path.home() / ".config" / "spploginmaster" / "wrapper.key"
+
+
+def _get_wrapper_key() -> bytes:
+    """Return (or create on first use) the 32-byte HMAC key for wrapper integrity."""
+    if _WRAPPER_KEY_PATH.exists():
+        return _WRAPPER_KEY_PATH.read_bytes()
+    key = _secrets.token_bytes(32)
+    _WRAPPER_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _WRAPPER_KEY_PATH.write_bytes(key)
+    _WRAPPER_KEY_PATH.chmod(0o600)
+    return key
+
+
+def compute_wrapper_hmac(app_id: str) -> str:
+    """Compute HMAC-SHA256 of the wrapper script for app_id."""
+    safe_id     = app_id.replace(":", "_").replace("/", "_")
+    script_path = SPP_WRAPPER_DIR / f"{safe_id}.sh"
+    content     = script_path.read_text() if script_path.exists() else ""
+    key         = _get_wrapper_key()
+    return _hmac.new(key, content.encode(), hashlib.sha256).hexdigest()
+
+
+def verify_wrapper(app_id: str) -> bool:
+    """
+    Verify wrapper script integrity before auth-mount proceeds. [SPP-08]
+    Returns True if the HMAC matches the stored value (or if no HMAC is
+    stored yet — legacy entries are allowed through with a warning).
+    """
+    from spp.config import get_app_config
+    cfg = get_app_config(app_id)
+    if not cfg:
+        return False
+    stored = cfg.get("wrapper_hmac")
+    if not stored:
+        print(f"[SPP] warning: no wrapper HMAC stored for {app_id} — skipping check")
+        return True
+    actual = compute_wrapper_hmac(app_id)
+    return _hmac.compare_digest(actual, stored)
 
 
 def ensure_dirs():

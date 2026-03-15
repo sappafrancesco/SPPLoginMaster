@@ -6,6 +6,7 @@ Handles per-app config stored in ~/.config/spploginmaster/
 import base64
 import json
 import os
+import re
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".config" / "spploginmaster"
@@ -78,3 +79,15 @@ def get_app_salt(app_id: str) -> bytes | None:
     config = load_config()
     b64 = config.get(app_id, {}).get("auth_salt")
     return base64.b64decode(b64) if b64 else None
+
+
+def safe_filename(app_id: str) -> str:
+    """
+    Sanitize app_id for use as a bare filename component.
+    Strips path separators and collapse dot-dot sequences to prevent
+    directory traversal via crafted app identifiers. [SPP-06]
+    """
+    safe = re.sub(r"[^A-Za-z0-9:_\-]", "_", app_id)
+    while ".." in safe:
+        safe = safe.replace("..", "_")
+    return safe

@@ -24,6 +24,42 @@ from spp.security import (
 
 VERSION = "2.0.0"
 
+_REPO = "sappafrancesco/SPPLoginMaster"
+
+
+def _check_update(current: str) -> tuple[str, str] | None:
+    """
+    Query GitHub releases API for a newer version.
+    Returns (latest_tag, release_url) or None if up to date / unreachable.
+    Run in a background thread — never blocks the GUI.
+    """
+    try:
+        import urllib.request, json
+
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{_REPO}/releases/latest",
+            headers={"User-Agent": f"SPPLoginMaster/{current}"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read())
+
+        latest = data.get("tag_name", "").lstrip("v")
+        url    = data.get("html_url",
+                          f"https://github.com/{_REPO}/releases/latest")
+
+        def _vtuple(v: str):
+            try:
+                return tuple(int(x) for x in v.split(".")[:3])
+            except ValueError:
+                return (0,)
+
+        if _vtuple(latest) > _vtuple(current):
+            return latest, url
+    except Exception:
+        pass
+    return None
+
+
 CSS = b"""
 .stat-card {
     border-radius: 12px;
@@ -249,6 +285,9 @@ class SPPMainWindow(Adw.ApplicationWindow):
 
         self.refresh()
         self._refresh_id = GLib.timeout_add_seconds(30, self._tick)
+
+        # Check for updates in background — never blocks startup
+        threading.Thread(target=self._check_update_bg, daemon=True).start()
 
     # ── Public ────────────────────────────────────────────────────────
 
@@ -496,6 +535,28 @@ class SPPMainWindow(Adw.ApplicationWindow):
     def _tick(self):
         self.refresh()
         return GLib.SOURCE_CONTINUE
+
+    def _check_update_bg(self):
+        result = _check_update(VERSION)
+        if result:
+            GLib.idle_add(self._show_update_banner, result[0], result[1])
+
+    def _show_update_banner(self, latest: str, url: str):
+        banner = Adw.Banner(
+            title=f"Update available: v{latest} — you have v{VERSION}",
+            button_label="View Release",
+            revealed=True,
+        )
+        banner.connect(
+            "button-clicked",
+            lambda _: Gio.AppInfo.launch_default_for_uri(url, None),
+        )
+        # Insert after the stats row (first child)
+        first = self.body.get_first_child()
+        if first:
+            self.body.insert_child_after(banner, first)
+        else:
+            self.body.append(banner)
 
     def do_close_request(self):
         if self._refresh_id:
