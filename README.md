@@ -33,7 +33,7 @@ The app's original data directory becomes a gocryptfs mount point. If the vault 
 ## Requirements
 
 ```
-sudo apt install fprintd gocryptfs fuse gnupg2 zenity libsecret-tools pamtester python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+sudo apt install fprintd gocryptfs fuse gnupg2 zenity libsecret-tools python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 ```
 
 | Package | Purpose |
@@ -42,7 +42,6 @@ sudo apt install fprintd gocryptfs fuse gnupg2 zenity libsecret-tools pamtester 
 | `gocryptfs` | Filesystem encryption (FUSE) |
 | `gnupg2` | GPG symmetric encryption of the vault key |
 | `libsecret-tools` | GNOME keyring access for fingerprint mode |
-| `pamtester` | PAM password verification |
 | `zenity` | Dialogs for the wrapper script |
 | `python3-gi`, `gir1.2-adw-1` | GTK4/Libadwaita Python bindings |
 
