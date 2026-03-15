@@ -88,7 +88,11 @@ def derive_passphrase(password: str, salt: bytes) -> str:
 # ── GNOME Keyring via secret-tool (fingerprint mode) ─────────────────────────
 
 def keyring_store(app_id: str, passphrase: str) -> bool:
-    """Store passphrase in the user's GNOME keyring."""
+    """
+    Store passphrase in the user's GNOME keyring.
+    Verifies the stored value with an immediate lookup to catch silent failures
+    (e.g. keyring daemon restarted, session mismatch).
+    """
     r = subprocess.run(
         ["secret-tool", "store",
          "--label", f"SPPLoginMaster: {app_id}",
@@ -97,7 +101,11 @@ def keyring_store(app_id: str, passphrase: str) -> bool:
         input=passphrase.encode(),
         capture_output=True,
     )
-    return r.returncode == 0
+    if r.returncode != 0:
+        return False
+    # Verify the secret was actually persisted
+    stored = keyring_get(app_id)
+    return stored == passphrase
 
 
 def keyring_get(app_id: str) -> str | None:
