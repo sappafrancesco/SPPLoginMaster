@@ -105,6 +105,14 @@ spp-cli unmount '{bash_app_id}' 2>/dev/null
 
 APP_NAME='{bash_name}'
 
+# Ensure the D-Bus session bus and XDG runtime dir are available.
+# .desktop launchers may not inherit the full login session environment,
+# which would cause secret-tool (GNOME keyring) to fail silently.
+export XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && [ -S "${{XDG_RUNTIME_DIR}}/bus" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${{XDG_RUNTIME_DIR}}/bus"
+fi
+
 {mount_section}
 # Launch application
 {launch_cmd}

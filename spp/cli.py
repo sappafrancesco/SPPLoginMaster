@@ -261,6 +261,16 @@ def auth_mount(app_id):
         )
         sys.exit(1)
 
+    # If the vault is already mounted (user pre-authenticated from the GUI),
+    # skip the auth dialog — the data is already accessible.
+    from spp.config import get_app_config
+    from spp.security import is_mounted
+    from pathlib import Path as _Path
+    _cfg = get_app_config(app_id)
+    if _cfg and _cfg.get("encrypt_data") and _cfg.get("mount_path"):
+        if is_mounted(_Path(_cfg["mount_path"])):
+            sys.exit(0)
+
     from spp.auth import get_passphrase_interactive
     passphrase = get_passphrase_interactive(app_id)
     if not passphrase:
@@ -303,6 +313,26 @@ def panic():
     for app_id, ok in results:
         status = "[green]✅[/green]" if ok else "[red]❌[/red]"
         console.print(f"  {status} {app_id}")
+
+
+@main.command(name="repair-wrappers")
+def repair_wrappers():
+    """Regenerate all wrapper scripts (fixes env issues without touching vaults)."""
+    from spp.launcher import create_wrapper_script, compute_wrapper_hmac
+    from spp.config import set_app_config
+    apps = list_apps()
+    if not apps:
+        console.print("[yellow]No apps protected.[/yellow]")
+        return
+    for app in apps:
+        try:
+            create_wrapper_script(app)
+            new_hmac = compute_wrapper_hmac(app["id"])
+            app["wrapper_hmac"] = new_hmac
+            set_app_config(app["id"], app)
+            console.print(f"  [green]✅[/green] {app.get('name', app['id'])}")
+        except Exception as e:
+            console.print(f"  [red]❌[/red] {app.get('name', app['id'])}: {e}")
 
 
 @main.command()
