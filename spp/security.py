@@ -218,45 +218,50 @@ def _fprintd_recover(attempt: int):
     Escalating recovery for a stuck fprintd device.
 
     attempt 0 : kill stale fprintd-verify CLI processes
-    attempt 3 : also kill any fprintd D-Bus helper processes
+    attempt 3 : broader pkill + udevadm USB re-probe
     attempt 5 : restart the fprintd systemd service
                 (tries sudo -n first, then pkexec for GUI auth)
     """
     import time
 
-    # Always: kill the fprintd-verify CLI helper (our old code path)
+    # Always: kill stale fprintd-verify CLI helper processes
     subprocess.run(["pkill", "-x", "fprintd-verify"], capture_output=True)
 
     if attempt >= 3:
-        # Kill broader fprintd-related processes
         subprocess.run(["pkill", "-f", "fprintd-verify"], capture_output=True)
-        print(f"[SPP] fprintd recover: aggressive pkill (attempt {attempt})")
+        # Re-probe USB devices — often unblocks a frozen sensor without root
+        subprocess.run(
+            ["udevadm", "trigger", "--subsystem-match=usb"],
+            capture_output=True, timeout=5,
+        )
+        print(f"[SPP] fprintd recover: pkill + udevadm (attempt {attempt})")
 
     if attempt >= 5:
         print("[SPP] fprintd recover: restarting fprintd service…")
-        # Try without password (works if user has NOPASSWD or polkit allows it)
         r = subprocess.run(
             ["sudo", "-n", "systemctl", "restart", "fprintd"],
             capture_output=True, timeout=10,
         )
         if r.returncode != 0 and shutil.which("pkexec"):
-            # Fallback: pkexec shows a GUI polkit auth dialog
             subprocess.run(
                 ["pkexec", "systemctl", "restart", "fprintd"],
                 capture_output=True, timeout=30,
             )
-        time.sleep(2)   # Give the daemon time to come back up
+        time.sleep(2)   # give the daemon time to come back up
 
 
-def verify_fingerprint(username: str) -> bool:
+def verify_fingerprint(username: str, status_cb=None) -> bool:
     """
     Verify fingerprint via fprintd D-Bus.
 
-    Handles AlreadyInUse with escalating auto-recovery:
+    Escalating auto-recovery for a stuck/crashed sensor:
       - Retries 1-2 : pkill stale fprintd-verify processes + backoff
-      - Retries 3-4 : broader process cleanup
+      - Retries 3-4 : broader pkill + udevadm USB re-probe
       - Retry   5+  : restart fprintd service (sudo -n / pkexec)
     Total timeout: 35 s.
+
+    status_cb(msg): optional callable, called with a human-readable string
+                    whenever recovery kicks in so the UI can update.
     """
     import time
 
@@ -265,14 +270,24 @@ def verify_fingerprint(username: str) -> bool:
     attempt  = 0
 
     while time.monotonic() < deadline:
+        if attempt > 0 and status_cb:
+            if attempt >= 5:
+                status_cb("Restarting fingerprint sensor…")
+            else:
+                status_cb("Sensor error — retrying…")
+
         _fprintd_recover(attempt)
 
         remaining = deadline - time.monotonic()
         result    = _fprintd_verify_once(username, remaining)
-        if result is not None:
-            return result
 
-        # AlreadyInUse — wait then escalate
+        if result is True:
+            return True
+        if result is False:
+            # Definitive: sensor responded with verify-no-match
+            return False
+
+        # result is None: recoverable (AlreadyInUse, sensor crash, timeout)
         attempt += 1
         wait = min(backoff, deadline - time.monotonic())
         if wait <= 0:
@@ -288,9 +303,11 @@ def _fprintd_verify_once(username: str, timeout_secs: float):
     Single fprintd Claim→VerifyStart→wait→Release cycle.
 
     Returns:
-      True   – verify-match
-      False  – definitive failure (no-match, scan error, timeout)
-      None   – AlreadyInUse (caller should retry after a delay)
+      True   – verify-match (definitive success)
+      False  – verify-no-match (definitive failure: wrong finger)
+      None   – recoverable: AlreadyInUse, sensor error, timeout with no
+               response, or any unexpected exception — caller should
+               run _fprintd_recover() and retry.
     """
     try:
         from gi.repository import Gio, GLib
@@ -298,16 +315,16 @@ def _fprintd_verify_once(username: str, timeout_secs: float):
         return False
 
     if timeout_secs <= 0:
-        return False
+        return None
 
     ctx            = GLib.MainContext.new()
     ctx.push_thread_default()
     loop           = GLib.MainLoop.new(ctx, False)
-    matched        = [None]
+    matched        = [None]   # True | False | None
     dev_ref        = [None]
     claimed        = [False]
     verify_started = [False]
-    busy           = [False]
+    recoverable    = [False]  # set for AlreadyInUse, sensor errors, timeout
 
     def _release():
         if dev_ref[0] is None:
@@ -330,13 +347,30 @@ def _fprintd_verify_once(username: str, timeout_secs: float):
             claimed[0] = False
 
     def on_signal(proxy, _sender, signal_name, params):
-        if signal_name == "VerifyStatus":
-            status, done = params.unpack()
-            if done:
-                matched[0] = (status == "verify-match")
-                verify_started[0] = False
-                _release()
-                loop.quit()
+        if signal_name != "VerifyStatus":
+            return
+        status, done = params.unpack()
+        if not done:
+            # Intermediate hints (retry-scan, swipe-too-short, etc.) —
+            # fprintd keeps the scan running, just wait for the next signal.
+            return
+        if status == "verify-match":
+            matched[0] = True
+        elif status == "verify-no-match":
+            matched[0] = False          # definitive: wrong finger
+        else:
+            # verify-unknown-error, verify-disconnected — sensor crashed
+            recoverable[0] = True
+        verify_started[0] = False
+        _release()
+        loop.quit()
+
+    def _on_timeout():
+        # No VerifyStatus signal arrived before the deadline.
+        # The sensor is hung — mark as recoverable so the caller retries.
+        recoverable[0] = True
+        loop.quit()
+        return False  # don't repeat
 
     try:
         bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
@@ -374,21 +408,33 @@ def _fprintd_verify_once(username: str, timeout_secs: float):
         )
         verify_started[0] = True
 
-        GLib.timeout_add_seconds(int(timeout_secs), lambda: loop.quit() or False)
+        GLib.timeout_add_seconds(int(timeout_secs), _on_timeout)
         loop.run()
 
     except Exception as e:
-        if "AlreadyInUse" in str(e):
-            busy[0] = True
+        err = str(e)
+        if "AlreadyInUse" in err:
+            recoverable[0] = True
+        elif any(k in err for k in ("NoEnrolledPrints", "NoSuchDevice")):
+            # Permanent conditions — don't bother retrying
+            print(f"[SPP] fingerprint unavailable: {e}")
+            return False
         else:
+            # Unknown D-Bus / GLib error — treat as recoverable
             print(f"[SPP] fingerprint error: {e}")
+            recoverable[0] = True
     finally:
         _release()
         ctx.pop_thread_default()
 
-    if busy[0]:
-        return None             # signal: device busy, caller should retry
-    return matched[0] is True   # True=match, False=no-match/timeout
+    if recoverable[0]:
+        return None   # caller should run recovery and retry
+    if matched[0] is True:
+        return True
+    if matched[0] is False:
+        return False
+    # matched is still None (loop quit for an unexpected reason) → recoverable
+    return None
 
 
 def is_fingerprint_available() -> bool:
