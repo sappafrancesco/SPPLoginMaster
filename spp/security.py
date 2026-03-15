@@ -35,7 +35,7 @@ REQUIRED_BINS = [
     "fusermount",
     "zenity",
     "secret-tool",   # libsecret-tools — keyring access for fingerprint mode
-    "pamtester",     # PAM password verification
+    # pamtester removed: password verification uses libpam directly via ctypes
 ]
 
 
@@ -53,7 +53,6 @@ def install_dependencies() -> bool:
         "zenity":         "zenity",
         "gpg":            "gnupg2",
         "secret-tool":    "libsecret-tools",
-        "pamtester":      "pamtester",
     }
     missing = check_dependencies()
     if not missing:
@@ -451,16 +450,76 @@ def is_fingerprint_available() -> bool:
 # ── Password / PAM ────────────────────────────────────────────────────────────
 
 def verify_password_pam(username: str, password: str) -> bool:
-    """Verify password against PAM via pamtester."""
+    """
+    Verify password via libpam directly (ctypes).
+
+    Calling pamtester via subprocess fails silently: pamtester uses
+    pam_misc_conv which calls tcgetattr(stdin) to disable echo — when stdin
+    is a PIPE (not a tty) tcgetattr returns ENOTTY, the conversation bails,
+    and PAM receives an empty password regardless of what was sent.
+
+    Calling libpam directly with our own conversation function bypasses stdin
+    entirely and supplies the password in-process.
+    """
     try:
-        r = subprocess.run(
-            ["pamtester", "login", username, "authenticate"],
-            input=password.encode(),
-            capture_output=True,
-            timeout=10,
+        import ctypes, ctypes.util
+
+        libpam = ctypes.CDLL(ctypes.util.find_library("pam"))
+        libc   = ctypes.CDLL(None)
+        libc.malloc.restype  = ctypes.c_void_p
+        libc.malloc.argtypes = [ctypes.c_size_t]
+        libc.strdup.restype  = ctypes.c_void_p
+        libc.strdup.argtypes = [ctypes.c_char_p]
+
+        PAM_SUCCESS         = 0
+        PAM_PROMPT_ECHO_OFF = 1
+
+        class _pam_message(ctypes.Structure):
+            _fields_ = [("msg_style", ctypes.c_int), ("msg", ctypes.c_char_p)]
+
+        class _pam_response(ctypes.Structure):
+            _fields_ = [("resp", ctypes.c_void_p), ("resp_retcode", ctypes.c_int)]
+
+        _CONV_FUNC = ctypes.CFUNCTYPE(
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.POINTER(_pam_message)),
+            ctypes.POINTER(ctypes.POINTER(_pam_response)),
+            ctypes.c_void_p,
         )
-        return r.returncode == 0
-    except Exception:
+
+        class _pam_conv(ctypes.Structure):
+            _fields_ = [("conv", _CONV_FUNC), ("appdata_ptr", ctypes.c_void_p)]
+
+        pw_bytes = password.encode()
+
+        @_CONV_FUNC
+        def _conv(n_msg, msg_list, resp_list, _appdata):
+            # PAM will free() both the array and each resp string,
+            # so everything must be malloc-allocated (not Python heap).
+            arr_ptr = libc.malloc(ctypes.sizeof(_pam_response) * n_msg)
+            if not arr_ptr:
+                return 1
+            ctypes.memset(arr_ptr, 0, ctypes.sizeof(_pam_response) * n_msg)
+            responses = (_pam_response * n_msg).from_address(arr_ptr)
+            for i in range(n_msg):
+                if msg_list[i].contents.msg_style == PAM_PROMPT_ECHO_OFF:
+                    responses[i].resp = libc.strdup(pw_bytes)
+            resp_list[0] = ctypes.cast(arr_ptr, ctypes.POINTER(_pam_response))
+            return PAM_SUCCESS
+
+        conv   = _pam_conv(_conv, None)
+        handle = ctypes.c_void_p()
+        libpam.pam_start(
+            b"login", username.encode(),
+            ctypes.byref(conv), ctypes.byref(handle),
+        )
+        ret = libpam.pam_authenticate(handle, 0)
+        libpam.pam_end(handle, ret)
+        return ret == PAM_SUCCESS
+
+    except Exception as e:
+        print(f"[SPP] PAM error: {e}")
         return False
 
 
