@@ -14,7 +14,7 @@ if ! command -v python3 &>/dev/null; then
 fi
 
 # System dependencies
-echo "📦 Installazione dipendenze di sistema..."
+echo "📦 Installing system dependencies..."
 sudo apt install -y \
     fprintd \
     gocryptfs \
@@ -29,12 +29,12 @@ sudo apt install -y \
     libadwaita-1-dev
 
 # Python dependencies via apt first
-echo "🐍 Installazione dipendenze Python..."
+echo "🐍 Installing Python dependencies through APT..."
 sudo apt install -y python3-click python3-rich || \
     pip3 install --user --break-system-packages click rich
  
 # Install package
-echo "📥 Installazione SPPLoginMaster..."
+echo "📥 Installing SPPLoginMaster..."
 pip3 install --user --break-system-packages -e .
 
 # Make scripts executable
@@ -44,7 +44,7 @@ chmod +x spp-cli spp-gui
 INSTALL_PATH="$HOME/.local/bin"
 if [[ ":$PATH:" != *":$INSTALL_PATH:"* ]]; then
     echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.bashrc
-    echo "⚠️  Aggiunto ~/.local/bin al PATH. Riavvia il terminale."
+    echo "⚠️  Added ~/.local/bin to PATH. Restart the terminal."
 fi
 
 # Create .desktop for GUI
@@ -64,8 +64,8 @@ EOF
 update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
 
 echo ""
-echo "✅ SPPLoginMaster installato!"
+echo "✅ SPPLoginMaster installed!"
 echo ""
-echo "  Avvio GUI:  spp-gui"
-echo "  Avvio CLI:  spp-cli --help"
+echo "  Start GUI (better interface):  spp-gui"
+echo "  Start CLI:  spp-cli --help"
 echo "  Setup:      spp-cli setup"
