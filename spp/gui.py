@@ -878,9 +878,9 @@ class ProtectWizard(Adw.Dialog):
         # Password entry — shown for password/both modes; hidden for fingerprint
         self._pw_group = Adw.PreferencesGroup(
             title="Set Password",
-            description="The vault key is derived from this password via PBKDF2-SHA256 (600 000 iterations). It is never stored.",
+            description="Must be your system login password. The vault key is derived from it via PBKDF2-SHA256 and never stored.",
         )
-        self._pw_entry_row = Adw.PasswordEntryRow(title="Password")
+        self._pw_entry_row = Adw.PasswordEntryRow(title="System login password")
         self._pw_confirm_row = Adw.PasswordEntryRow(title="Confirm password")
         self._pw_group.add(self._pw_entry_row)
         self._pw_group.add(self._pw_confirm_row)
@@ -920,6 +920,11 @@ class ProtectWizard(Adw.Dialog):
                 return
             if len(pw) < 8:
                 self.win.toast("Password must be at least 8 characters.")
+                return
+            # Verify via PAM now so we don't create a vault that can never be opened
+            from spp.security import verify_password_pam
+            if not verify_password_pam(os.environ.get("USER", ""), pw):
+                self.win.toast("Wrong password — this must be your system login password.")
                 return
             self._password = pw
 

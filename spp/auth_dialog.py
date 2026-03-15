@@ -252,27 +252,38 @@ class AuthWindow(Adw.ApplicationWindow):
         self._fp_set("scanning", "Place your finger on the sensor…")
 
         def work():
-            from spp.auth import get_passphrase
+            from spp.security import verify_fingerprint, keyring_get
+            cfg = get_app_config(self._app_id) or {}
+            username = cfg.get("username", os.environ.get("USER", ""))
 
             def on_status(msg):
                 GLib.idle_add(self._fp_set, "error", msg)
 
-            pp = get_passphrase(self._app_id, status_cb=on_status)
-            GLib.idle_add(self._on_fp_only_result, pp)
+            fp_ok = verify_fingerprint(username, status_cb=on_status)
+            if not fp_ok:
+                GLib.idle_add(self._on_fp_only_result, None, False)
+                return
+
+            pp = keyring_get(self._app_id)
+            GLib.idle_add(self._on_fp_only_result, pp, True)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_fp_only_result(self, passphrase):
+    def _on_fp_only_result(self, passphrase, fp_matched: bool):
         if self._closing:
             return
         if passphrase:
             self._fp_set("success", "Fingerprint recognised!")
             self._result[0] = passphrase
             GLib.timeout_add(650, self._finish)
-        else:
+        elif not fp_matched:
             self._bump_attempts()
             self._fp_set("error", "Not recognised — try again…")
             GLib.timeout_add(1800, self._scan_fingerprint)
+        else:
+            # Fingerprint matched but passphrase not in keyring — app needs re-protecting
+            self._fp_set("error", "Vault key missing — re-protect the app in SPP.")
+            GLib.timeout_add(3000, self._cancel)
 
     # fingerprint step for "both" mode ────────────────────────────────────────
 
