@@ -190,4 +190,4 @@ Open an issue before submitting a pull request.
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE)
+CC0-1.0 license — see [LICENSE](LICENSE)
