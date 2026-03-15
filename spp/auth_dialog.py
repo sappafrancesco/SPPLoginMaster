@@ -253,12 +253,11 @@ class AuthWindow(Adw.ApplicationWindow):
 
         def work():
             from spp.auth import get_passphrase
-            # verify_fingerprint handles AlreadyInUse internally with backoff;
-            # update the status label while we wait so the user sees feedback.
-            GLib.idle_add(
-                self._fp_set, "scanning", "Place your finger on the sensor…"
-            )
-            pp = get_passphrase(self._app_id)
+
+            def on_status(msg):
+                GLib.idle_add(self._fp_set, "error", msg)
+
+            pp = get_passphrase(self._app_id, status_cb=on_status)
             GLib.idle_add(self._on_fp_only_result, pp)
 
         threading.Thread(target=work, daemon=True).start()
@@ -286,7 +285,11 @@ class AuthWindow(Adw.ApplicationWindow):
             from spp.security import verify_fingerprint
             cfg = get_app_config(self._app_id) or {}
             username = cfg.get("username", os.environ.get("USER", ""))
-            ok = verify_fingerprint(username)
+
+            def on_status(msg):
+                GLib.idle_add(self._fp_set, "error", msg)
+
+            ok = verify_fingerprint(username, status_cb=on_status)
             GLib.idle_add(self._on_fp_for_both, ok)
 
         threading.Thread(target=work, daemon=True).start()

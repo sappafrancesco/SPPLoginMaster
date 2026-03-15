@@ -25,7 +25,7 @@ from spp.security import (
 )
 
 
-def get_passphrase(app_id: str, password: str | None = None) -> str | None:
+def get_passphrase(app_id: str, password: str | None = None, status_cb=None) -> str | None:
     """
     Verify the user's identity according to the app's auth_method, then
     return the decryption passphrase.
@@ -50,7 +50,7 @@ def get_passphrase(app_id: str, password: str | None = None) -> str | None:
 
     # ── Step 1 : fingerprint verification (if required) ───────────────
     if auth_method in ("fingerprint", "both"):
-        if not verify_fingerprint(username):
+        if not verify_fingerprint(username, status_cb=status_cb):
             return None
 
     # ── Step 2 : password verification + passphrase derivation ───────
