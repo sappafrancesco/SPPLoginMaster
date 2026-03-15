@@ -249,6 +249,18 @@ def auth_mount(app_id):
     Called by wrapper scripts — collects credentials interactively via zenity.
     Exits with code 0 on success, 1 on any auth or mount failure.
     """
+    # Verify wrapper script has not been tampered with [SPP-08]
+    from spp.launcher import verify_wrapper
+    if not verify_wrapper(app_id):
+        import subprocess as _sp
+        _sp.run(
+            ["zenity", "--error", "--title=SPPLoginMaster",
+             "--text=⚠️  Security alert: wrapper script integrity check failed.\n"
+             "Re-protect the application to restore a trusted launcher."],
+            capture_output=True,
+        )
+        sys.exit(1)
+
     from spp.auth import get_passphrase_interactive
     passphrase = get_passphrase_interactive(app_id)
     if not passphrase:

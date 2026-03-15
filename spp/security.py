@@ -25,7 +25,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from spp.config import CONFIG_DIR
+import time
+
+from spp.config import CONFIG_DIR, safe_filename
 
 
 REQUIRED_BINS = [
@@ -121,13 +123,52 @@ def keyring_delete(app_id: str):
 
 # ── Symmetric GPG encryption (AES-256 with passphrase) ───────────────────────
 
+# Module-level: track open memfds so their fd numbers stay valid [SPP-01, SPP-07]
+_open_memfds: dict[str, int] = {}
+
+
 def _pp_tmpfile(passphrase: str) -> str:
-    """Write passphrase to a 0600 temp file, return path. Caller must shred."""
+    """
+    Write passphrase to a Linux memfd (anonymous in-memory file descriptor).
+    Returns '/proc/self/fd/<n>' — never written to disk, immune to
+    wear-levelling leaks on SSDs and copy-on-write filesystems. [SPP-01, SPP-07]
+
+    Falls back to a 0600 temp file if memfd_create is unavailable.
+    """
+    try:
+        import ctypes as _ct
+        _libc = _ct.CDLL(None)
+        _libc.memfd_create.restype  = _ct.c_int
+        _libc.memfd_create.argtypes = [_ct.c_char_p, _ct.c_uint]
+        fd = _libc.memfd_create(b"spp-pp", 0)
+        if fd >= 0:
+            os.write(fd, passphrase.encode())
+            path = f"/proc/self/fd/{fd}"
+            _open_memfds[path] = fd
+            return path
+    except Exception:
+        pass
+
+    # Fallback: 0600 tempfile
     tmp = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".pp")
     tmp.write(passphrase)
     tmp.close()
     os.chmod(tmp.name, 0o600)
     return tmp.name
+
+
+def _pp_cleanup(path: str | None):
+    """Close a memfd or shred a tmpfile created by _pp_tmpfile."""
+    if not path:
+        return
+    if path in _open_memfds:
+        try:
+            os.close(_open_memfds.pop(path))
+        except OSError:
+            pass
+        return
+    if Path(path).exists():
+        subprocess.run(["shred", "-u", path], capture_output=True)
 
 
 def create_encrypted_keyfile(app_id: str, passphrase: str) -> Path | None:
@@ -136,8 +177,9 @@ def create_encrypted_keyfile(app_id: str, passphrase: str) -> Path | None:
     S2K: iterated+salted SHA-512, 65 011 712 iterations.
     The file can ONLY be decrypted with the exact same passphrase.
     """
-    keyfile_plain = CONFIG_DIR / f"{app_id}.key.plain"
-    keyfile_gpg   = CONFIG_DIR / f"{app_id}.key.gpg"
+    sfid = safe_filename(app_id)
+    keyfile_plain = CONFIG_DIR / f"{sfid}.key.plain"
+    keyfile_gpg   = CONFIG_DIR / f"{sfid}.key.gpg"
     pp_file = None
 
     # Random vault key: 64 hex chars (256 bits of entropy) + newline
@@ -164,9 +206,9 @@ def create_encrypted_keyfile(app_id: str, passphrase: str) -> Path | None:
     except Exception as e:
         print(f"Keyfile creation error: {e}")
     finally:
-        for f in [str(keyfile_plain), pp_file]:
-            if f and Path(f).exists():
-                subprocess.run(["shred", "-u", f], capture_output=True)
+        _pp_cleanup(pp_file)
+        if keyfile_plain.exists():
+            subprocess.run(["shred", "-u", str(keyfile_plain)], capture_output=True)
 
     if keyfile_gpg.exists():
         keyfile_gpg.unlink()
@@ -179,7 +221,8 @@ def decrypt_keyfile_to_tempfile(app_id: str, passphrase: str) -> str | None:
     Returns path to a 0600 temp file with the plaintext key.
     Caller MUST shred this file after use.
     """
-    keyfile_gpg = CONFIG_DIR / f"{app_id}.key.gpg"
+    sfid = safe_filename(app_id)
+    keyfile_gpg = CONFIG_DIR / f"{sfid}.key.gpg"
     if not keyfile_gpg.exists():
         return None
 
@@ -203,8 +246,7 @@ def decrypt_keyfile_to_tempfile(app_id: str, passphrase: str) -> str | None:
     except Exception:
         pass
     finally:
-        if pp_file and Path(pp_file).exists():
-            subprocess.run(["shred", "-u", pp_file], capture_output=True)
+        _pp_cleanup(pp_file)
 
     subprocess.run(["shred", "-u", tmp.name], capture_output=True)
     return None
@@ -223,11 +265,12 @@ def _fprintd_recover(attempt: int):
     """
     import time
 
-    # Always: kill stale fprintd-verify CLI helper processes
-    subprocess.run(["pkill", "-x", "fprintd-verify"], capture_output=True)
+    # Kill only OUR OWN stale fprintd-verify processes — filter by UID [SPP-09]
+    _uid = str(os.getuid())
+    subprocess.run(["pkill", "--euid", _uid, "-x", "fprintd-verify"], capture_output=True)
 
     if attempt >= 3:
-        subprocess.run(["pkill", "-f", "fprintd-verify"], capture_output=True)
+        subprocess.run(["pkill", "--euid", _uid, "-f", "fprintd-verify"], capture_output=True)
         # Re-probe USB devices — often unblocks a frozen sensor without root
         subprocess.run(
             ["udevadm", "trigger", "--subsystem-match=usb"],
@@ -449,6 +492,10 @@ def is_fingerprint_available() -> bool:
 
 # ── Password / PAM ────────────────────────────────────────────────────────────
 
+# Per-username lockout state for brute-force protection [SPP-05]
+_pam_lockout: dict[str, tuple[int, float]] = {}  # username -> (fail_count, locked_until)
+
+
 def verify_password_pam(username: str, password: str) -> bool:
     """
     Verify password via libpam directly (ctypes).
@@ -460,7 +507,17 @@ def verify_password_pam(username: str, password: str) -> bool:
 
     Calling libpam directly with our own conversation function bypasses stdin
     entirely and supplies the password in-process.
+
+    Rate limiting: exponential backoff after repeated failures. [SPP-05]
     """
+    # ── Rate limiting check [SPP-05] ──────────────────────────────────
+    fail_count, locked_until = _pam_lockout.get(username, (0, 0.0))
+    now = time.monotonic()
+    if now < locked_until:
+        remaining = int(locked_until - now)
+        print(f"[SPP] PAM: {username} locked for {remaining}s more")
+        return False
+
     try:
         import ctypes, ctypes.util
 
@@ -516,7 +573,16 @@ def verify_password_pam(username: str, password: str) -> bool:
         )
         ret = libpam.pam_authenticate(handle, 0)
         libpam.pam_end(handle, ret)
-        return ret == PAM_SUCCESS
+
+        if ret == PAM_SUCCESS:
+            _pam_lockout.pop(username, None)   # reset on success
+            return True
+
+        # ── Update lockout on failure [SPP-05] ────────────────────────
+        fail_count += 1
+        wait = min(2 ** (fail_count - 1), 300)  # 1, 2, 4, 8 … 300 s
+        _pam_lockout[username] = (fail_count, time.monotonic() + wait)
+        return False
 
     except Exception as e:
         print(f"[SPP] PAM error: {e}")
@@ -546,6 +612,17 @@ def mount_vault(app_id: str, vault_path: Path, mount_path: Path, passphrase: str
     if not tmp_key:
         return False
     mount_path.mkdir(parents=True, exist_ok=True)
+
+    # TOCTOU guard: verify mount_path is a real directory, not a symlink. [SPP-03]
+    # An attacker could replace it with a symlink between mkdir and mount,
+    # redirecting the vault mount to an arbitrary directory.
+    try:
+        _fd = os.open(str(mount_path), os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
+        os.close(_fd)
+    except OSError:
+        print(f"[SPP] TOCTOU: mount_path is a symlink or not a directory: {mount_path}")
+        return False
+
     try:
         r = subprocess.run(
             ["gocryptfs", "-passfile", tmp_key, str(vault_path), str(mount_path)],

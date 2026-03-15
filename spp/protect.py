@@ -7,6 +7,7 @@ No passphrase → no mount. No mount → no data.
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 from spp.config import (
@@ -40,6 +41,24 @@ def _cleanup(vault_path: Path, tmp_mount: Path | None, app_id: str):
     gpg = CONFIG_DIR / f"{app_id}.key.gpg"
     if gpg.exists():
         gpg.unlink()
+
+
+def _shred_tree(path: Path):
+    """
+    Overwrite-then-delete every regular file under path with shred,
+    then remove the directory tree.
+
+    Note: shred is not effective on SSDs, btrfs, or ZFS due to
+    wear-levelling and copy-on-write semantics.  Full-disk encryption
+    (LUKS) is the only complete mitigation on such storage. [SPP-02, SPP-07]
+    """
+    try:
+        for f in path.rglob("*"):
+            if f.is_file() and not f.is_symlink():
+                subprocess.run(["shred", "-u", str(f)], capture_output=True)
+    except Exception:
+        pass
+    shutil.rmtree(str(path), ignore_errors=True)
 
 
 # ── protect_app ───────────────────────────────────────────────────────────────
@@ -187,8 +206,8 @@ def protect_app(
             _cleanup(vault_path, None, app_id)
             return False, "Cannot mount vault at final location — original data restored."
 
-        # Step 7 — Vault is live, delete plaintext backup
-        shutil.rmtree(str(backup_path), ignore_errors=True)
+        # Step 7 — Shred plaintext backup then remove it [SPP-02]
+        _shred_tree(backup_path)
 
     # ── Persist passphrase / salt ─────────────────────────────────────
     app_config = {
@@ -218,6 +237,11 @@ def protect_app(
     # ── Wire up launcher ──────────────────────────────────────────────
     wrapper = create_wrapper_script(app_config)
     patch_desktop_file(app_config, wrapper)
+
+    # Store HMAC of wrapper script for integrity verification [SPP-08]
+    from spp.launcher import compute_wrapper_hmac
+    app_config["wrapper_hmac"] = compute_wrapper_hmac(app_id)
+    set_app_config(app_id, app_config)
 
     return True, f"✅ {app_name} successfully protected."
 
