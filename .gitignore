@@ -9,4 +9,4 @@ build/
 .DS_Store
 .claude
 /.claude
-.claude/*
+.claude/*node_modules/
