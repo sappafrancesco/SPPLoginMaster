@@ -259,7 +259,7 @@ def auth_mount(app_id):
              "Re-protect the application to restore a trusted launcher."],
             capture_output=True,
         )
-        sys.exit(1)
+        sys.exit(1) 
 
     # If the vault is already mounted (user pre-authenticated from the GUI),
     # skip the auth dialog — the data is already accessible.
