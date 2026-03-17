@@ -151,7 +151,10 @@ def _pp_tmpfile(passphrase: str) -> str:
         fd = _libc.memfd_create(b"spp-pp", 0)
         if fd >= 0:
             os.write(fd, passphrase.encode())
-            path = f"/proc/self/fd/{fd}"
+            # Use the absolute PID path so child processes (e.g. gpg) can also
+            # access it via /proc/<parent-pid>/fd/<n>.  /proc/self/fd/<n> would
+            # resolve to the *child's* fd table instead of ours.
+            path = f"/proc/{os.getpid()}/fd/{fd}"
             _open_memfds[path] = fd
             return path
     except Exception:
