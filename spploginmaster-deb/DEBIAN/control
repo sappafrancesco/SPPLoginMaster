@@ -1,0 +1,9 @@
+Package: spploginmaster
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: python3, python3-gi, python3-click, python3-rich, fprintd, gocryptfs, zenity, gnupg2, gir1.2-gtk-4.0, gir1.2-adw-1
+Maintainer: Francesco Sappa <projects@sappadev.it>
+Description: Secure any Snap/Flatpak app requiring a password/fingerprint to access it. 
+ This app uses advanced encryption to create secure vaults, making the apps inaccessible without the configured credentials.

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=SPPLoginMaster
+Comment=Secure Privacy Protection Login Master
+Exec=spp-gui
+Icon=security-high
+Terminal=false
+Categories=Security;System;

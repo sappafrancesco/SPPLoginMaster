@@ -1,0 +1,65 @@
+name: Build and release .deb file
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Crea struttura .deb
+        run: |
+          mkdir -p spploginmaster-deb/DEBIAN
+          mkdir -p spploginmaster-deb/usr/local/bin
+          mkdir -p spploginmaster-deb/usr/share/applications
+
+      - name: Scrivi control
+        run: |
+          cat > spploginmaster-deb/DEBIAN/control << EOF
+          Package: spploginmaster
+          Version: ${GITHUB_REF_NAME#v}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Depends: python3, python3-gi, python3-click, python3-rich, fprintd, gocryptfs, zenity, gnupg2, gir1.2-gtk-4.0, gir1.2-adw-1
+          Maintainer: Francesco Sappa <tua@email.com>
+          Description: Secure Privacy Protection Login Master
+           Credential manager con vault cifrati, GPG e fingerprint via fprintd.
+          EOF
+
+      - name: Copia file app
+        run: |
+          cp spp-gui spp-cli spploginmaster-deb/usr/local/bin/
+          chmod +x spploginmaster-deb/usr/local/bin/spp-gui
+          chmod +x spploginmaster-deb/usr/local/bin/spp-cli
+
+      - name: Crea .desktop
+        run: |
+          cat > spploginmaster-deb/usr/share/applications/spploginmaster.desktop << EOF
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=SPPLoginMaster
+          Comment=Secure Privacy Protection Login Master
+          Exec=spp-gui
+          Icon=security-high
+          Terminal=false
+          Categories=Security;System;
+          EOF
+
+      - name: Build .deb
+        run: |
+          dpkg-deb --build spploginmaster-deb spploginmaster_${GITHUB_REF_NAME#v}_amd64.deb
+
+      - name: Release GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          files: spploginmaster_*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
